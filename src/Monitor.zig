@@ -60,8 +60,7 @@ fn listener(_: *wl.Output, event: wl.Output.Event, monitor: *Monitor) void {
                 return;
             }
             monitor.bar = Bar.create(monitor) catch |err| {
-                log.err("cannot create bar for monitor {}: {s}",
-                        .{monitor.globalName, @errorName(err)});
+                log.err("cannot create bar for monitor {}: {s}", .{ monitor.globalName, @errorName(err) });
                 return;
             };
         },

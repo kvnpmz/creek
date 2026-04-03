@@ -74,7 +74,7 @@ fn pointerListener(
             input.pointer.bar = bar;
             input.pointer.surface = data.surface;
         },
-        .leave => |_| {
+        .leave => {
             input.pointer.bar = null;
             input.pointer.surface = null;
         },
@@ -93,8 +93,7 @@ fn pointerListener(
                 const x: u32 = @intCast(input.pointer.x);
                 if (x < bar.height * @as(u16, bar.monitor.tags.tags.len)) {
                     bar.monitor.tags.handleClick(x) catch |err| {
-                        log.err("handleClick failed for monitor {}: {s}",
-                                .{bar.monitor.globalName, @errorName(err)});
+                        log.err("handleClick failed for monitor {}: {s}", .{ bar.monitor.globalName, @errorName(err) });
                         return;
                     };
                 }

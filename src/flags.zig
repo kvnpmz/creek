@@ -38,32 +38,37 @@ pub fn parser(comptime Arg: type, comptime flags: []const Flag) type {
             flags: Flags,
 
             pub const Flags = flags_type: {
-                var fields: []const std.builtin.Type.StructField = &.{};
-                for (flags) |flag| {
-                    const field: std.builtin.Type.StructField = switch (flag.kind) {
-                        .boolean => .{
-                            .name = flag.name,
-                            .type = bool,
-                            .default_value = &false,
-                            .is_comptime = false,
-                            .alignment = @alignOf(bool),
+                var field_names: [flags.len][:0]const u8 = undefined;
+                var field_types: [flags.len]type = undefined;
+                var field_attrs: [flags.len]std.builtin.Type.StructField.Attributes = undefined;
+                for (flags, 0..) |flag, i| {
+                    field_names[i] = flag.name;
+                    switch (flag.kind) {
+                        .boolean => {
+                            field_types[i] = bool;
+                            field_types[i] = .{
+                                .default_value = &false,
+                                .@"comptime" = false,
+                                .@"align" = @alignOf(bool),
+                            };
                         },
-                        .arg => .{
-                            .name = flag.name,
-                            .type = ?[:0]const u8,
-                            .default_value_ptr = &@as(?[:0]const u8, null),
-                            .is_comptime = false,
-                            .alignment = @alignOf(?[:0]const u8),
+                        .arg => {
+                            field_types[i] = ?[:0]const u8;
+                            field_attrs[i] = .{
+                                .default_value_ptr = &@as(?[:0]const u8, null),
+                                .@"comptime" = false,
+                                .@"align" = @alignOf(?[:0]const u8),
+                            };
                         },
-                    };
-                    fields = fields ++ [_]std.builtin.Type.StructField{field};
+                    }
                 }
-                break :flags_type @Type(.{ .@"struct" = .{
-                    .layout = .auto,
-                    .fields = fields,
-                    .decls = &.{},
-                    .is_tuple = false,
-                } });
+                break :flags_type @Struct(
+                    .auto,
+                    null,
+                    &field_names,
+                    &field_types,
+                    &field_attrs,
+                );
             };
         };
 

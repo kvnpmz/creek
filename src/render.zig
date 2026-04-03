@@ -228,8 +228,8 @@ pub fn renderText(bar: *Bar, text: []const u8) !void {
         bar.text_width = width;
 
         if (state.wayland.river_seat) |seat| {
-            seat.mtx.lock();
-            defer seat.mtx.unlock();
+            try seat.mtx.lock(state.io);
+            defer seat.mtx.unlock(state.io);
 
             try renderTitle(bar, seat.window_title);
             bar.title.surface.commit();

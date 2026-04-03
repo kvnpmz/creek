@@ -1,4 +1,5 @@
 const std = @import("std");
+const Io = std.Io;
 const mem = std.mem;
 const posix = std.posix;
 const linux = std.os.linux;
@@ -8,7 +9,9 @@ const wl = @import("wayland").client.wl;
 
 const Buffer = @This();
 
-mmap: ?[]align(4096) u8 = null,
+const state = &@import("root").state;
+
+mmap: ?Io.File.MemoryMap = null,
 data: ?[]u32 = null,
 buffer: ?*wl.Buffer = null,
 pix: ?*pixman.Image = null,
@@ -25,15 +28,17 @@ pub fn resize(self: *Buffer, shm: *wl.Shm, width: u31, height: u31) !void {
     self.width = width;
     self.height = height;
 
+    // There doesn't seem to be a way to memfd through a File abstraction, as of Zig 0.16
     const fd = try posix.memfd_create("creek-shm", linux.MFD.CLOEXEC);
-    defer posix.close(fd);
+    const file = Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer file.close(state.io);
 
     const stride = width * 4;
     self.size = stride * height;
-    try posix.ftruncate(fd, self.size);
+    try file.setLength(state.io, self.size);
 
-    self.mmap = try posix.mmap(null, self.size, posix.PROT.READ | posix.PROT.WRITE, .{ .TYPE = .SHARED }, fd, 0);
-    self.data = mem.bytesAsSlice(u32, self.mmap.?);
+    self.mmap = try file.createMemoryMap(state.io, .{ .len = self.size });
+    self.data = mem.bytesAsSlice(u32, self.mmap.?.memory);
 
     const pool = try shm.createPool(fd, self.size);
     defer pool.destroy();
@@ -48,7 +53,7 @@ pub fn resize(self: *Buffer, shm: *wl.Shm, width: u31, height: u31) !void {
 pub fn deinit(self: *Buffer) void {
     if (self.pix) |pix| _ = pix.unref();
     if (self.buffer) |buf| buf.destroy();
-    if (self.mmap) |mmap| posix.munmap(mmap);
+    if (self.mmap) |*mmap| mmap.destroy(state.io);
 }
 
 fn listener(_: *wl.Buffer, event: wl.Buffer.Event, buffer: *Buffer) void {

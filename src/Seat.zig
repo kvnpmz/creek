@@ -1,6 +1,6 @@
 const std = @import("std");
 const log = std.log;
-const Mutex = std.Thread.Mutex;
+const Mutex = std.Io.Mutex;
 
 const wl = @import("wayland").client.wl;
 
@@ -16,7 +16,7 @@ seat_status: *zriver.SeatStatusV1,
 current_output: ?*wl.Output,
 window_title: ?[:0]u8,
 status_buffer: [4096]u8 = undefined,
-status_text: std.io.FixedBufferStream([]u8),
+status_text: std.Io.Writer,
 mtx: Mutex,
 
 pub fn create() !*Seat {
@@ -24,22 +24,22 @@ pub fn create() !*Seat {
     const manager = state.wayland.status_manager.?;
     const seat = state.wayland.seat.?;
 
-    self.mtx = Mutex{};
+    self.mtx = .init;
     self.current_output = null;
     self.window_title = null;
     self.seat_status = try manager.getRiverSeatStatus(seat);
     self.seat_status.setListener(*Seat, seatListener, self);
 
-    self.status_text = std.io.fixedBufferStream(&self.status_buffer);
+    self.status_text = .fixed(&self.status_buffer);
     return self;
 }
 
 pub fn destroy(self: *Seat) void {
-    self.mtx.lock();
+    self.mtx.lock(state.io) catch unreachable;
     if (self.window_title) |w| {
         state.gpa.free(w);
     }
-    self.mtx.unlock();
+    self.mtx.unlock(state.io);
 
     self.seat_status.destroy();
     state.gpa.destroy(self);
@@ -76,8 +76,8 @@ pub fn focusedBar(self: *Seat) ?*Bar {
 fn updateTitle(self: *Seat, data: [*:0]const u8) void {
     const title = std.mem.sliceTo(data, 0);
 
-    self.mtx.lock();
-    defer self.mtx.unlock();
+    self.mtx.lock(state.io) catch unreachable;
+    defer self.mtx.unlock(state.io);
 
     if (self.window_title) |t| {
         state.gpa.free(t);
@@ -106,9 +106,9 @@ fn focusedOutput(self: *Seat, output: *wl.Output) void {
     if (monitor) |m| {
         if (m.confBar()) |bar| {
             self.current_output = m.output;
-            render.renderText(bar, self.status_text.getWritten()) catch |err| {
-                log.err("renderText failed on focus for monitor {}: {s}",
-                    .{m.globalName, @errorName(err)});
+            defer self.status_text.flush() catch unreachable;
+            render.renderText(bar, self.status_text.buffered()) catch |err| {
+                log.err("renderText failed on focus for monitor {}: {s}", .{ m.globalName, @errorName(err) });
                 return;
             };
 
@@ -132,14 +132,12 @@ fn unfocusedOutput(self: *Seat, output: *wl.Output) void {
     if (monitor) |m| {
         if (m.confBar()) |bar| {
             render.resetText(bar) catch |err| {
-                log.err("resetText failed for monitor {}: {s}",
-                    .{bar.monitor.globalName, @errorName(err)});
+                log.err("resetText failed for monitor {}: {s}", .{ bar.monitor.globalName, @errorName(err) });
             };
             bar.text.surface.commit();
 
             render.renderTitle(bar, null) catch |err| {
-                log.err("renderTitle failed on unfocus for monitor {}: {s}",
-                    .{bar.monitor.globalName, @errorName(err)});
+                log.err("renderTitle failed on unfocus for monitor {}: {s}", .{ bar.monitor.globalName, @errorName(err) });
                 return;
             };
 
@@ -157,8 +155,7 @@ fn focusedView(self: *Seat, title: [*:0]const u8) void {
     self.updateTitle(title);
     if (self.focusedBar()) |bar| {
         render.renderTitle(bar, self.window_title) catch |err| {
-            log.err("renderTitle failed on focused view for monitor {}: {s}",
-                .{bar.monitor.globalName, @errorName(err)});
+            log.err("renderTitle failed on focused view for monitor {}: {s}", .{ bar.monitor.globalName, @errorName(err) });
             return;
         };
 

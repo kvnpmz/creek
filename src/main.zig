@@ -1,6 +1,6 @@
 const std = @import("std");
 const heap = std.heap;
-const io = std.io;
+const Io = std.Io;
 const log = std.log;
 const mem = std.mem;
 const posix = std.posix;
@@ -25,6 +25,7 @@ pub const Config = struct {
 };
 
 pub const State = struct {
+    io: Io,
     gpa: mem.Allocator,
     config: Config,
     wayland: Wayland,
@@ -58,8 +59,8 @@ fn parseColorFlag(flg: ?[]const u8, def: []const u8) !pixman.Color {
     }
 }
 
-fn parseFlags(args: [][*:0]u8) !Config {
-    const result = flags.parser([*:0]const u8, &.{
+fn parseFlags(args: []const [:0]const u8) !Config {
+    const result = flags.parser([:0]const u8, &.{
         .{ .name = "hg", .kind = .arg }, // height
         .{ .name = "fn", .kind = .arg }, // font name
         .{ .name = "nf", .kind = .arg }, // normal foreground
@@ -101,7 +102,7 @@ pub fn usage() noreturn {
     ;
 
     var buffer: [1024]u8 = undefined;
-    var serr = std.fs.File.stderr().writer(&buffer);
+    var serr = Io.File.stderr().writer(state.io, &buffer);
     serr.interface.writeAll(desc) catch |err| {
         std.debug.panic("{s}", .{@errorName(err)});
     };
@@ -112,19 +113,18 @@ pub fn usage() noreturn {
     process.exit(1);
 }
 
-pub fn main() anyerror!void {
-    var gpa: heap.GeneralPurposeAllocator(.{}) = .{};
-    defer _ = gpa.deinit();
-
+pub fn main(init: process.Init) anyerror!void {
     _ = fcft.init(.auto, false, .warning);
     if (fcft.capabilities() & fcft.Capabilities.text_run_shaping == 0) {
         @panic("Support for text run shaping required in fcft and not present");
     }
 
-    state.gpa = gpa.allocator();
+    state.io = init.io;
+    state.gpa = init.gpa;
     state.wayland = try Wayland.init();
     state.loop = try Loop.init();
-    state.config = parseFlags(os.argv[1..]) catch |err| {
+    var args = try init.minimal.args.toSlice(state.gpa);
+    state.config = parseFlags(args[1..]) catch |err| {
         log.err("Option parsing failed with: {s}", .{@errorName(err)});
         usage();
     };

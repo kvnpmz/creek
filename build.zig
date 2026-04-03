@@ -37,19 +37,19 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         }),
     });
     exe.pie = pie;
 
-    exe.linkLibC();
     exe.root_module.addImport("wayland", wayland);
-    exe.linkSystemLibrary("wayland-client");
+    exe.root_module.linkSystemLibrary("wayland-client", .{});
 
     exe.root_module.addImport("pixman", pixman);
-    exe.linkSystemLibrary("pixman-1");
+    exe.root_module.linkSystemLibrary("pixman-1", .{});
 
     exe.root_module.addImport("fcft", fcft);
-    exe.linkSystemLibrary("fcft");
+    exe.root_module.linkSystemLibrary("fcft", .{});
 
     b.installArtifact(exe);
 
