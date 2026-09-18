@@ -1,6 +1,7 @@
 const std = @import("std");
 const log = std.log;
 const mem = std.mem;
+const Io = std.Io;
 
 const fcft = @import("fcft");
 const wl = @import("wayland").client.wl;
@@ -14,6 +15,16 @@ const Widget = @import("Widget.zig");
 const Bar = @This();
 
 const state = &@import("root").state;
+
+const StatusClick = struct {
+    left: i32,
+    right: i32,
+    rune: u32,
+
+    pub fn contains(self: StatusClick, x: i32) bool {
+        return x >= self.left and x < self.right;
+    }
+};
 
 monitor: *Monitor,
 
@@ -30,6 +41,8 @@ text: Widget,
 
 tags_width: u16,
 text_width: u16,
+status_text: ?[]u8,
+status_clicks: std.ArrayList(StatusClick),
 
 abbrev_width: u16,
 abbrev_run: *const fcft.TextRun,
@@ -45,11 +58,53 @@ fn toRgba(color: u16) u32 {
     return (@as(u32, color) >> 8) << 24 | 0xffffff;
 }
 
+pub fn handleStatusClick(self: *Bar, x: i32) void {
+    for (self.status_clicks.items) |click| {
+        if (click.contains(x)) {
+            var buf: [256]u8 = undefined;
+            var rune_buf: [4]u8 = undefined;
+            const rune_len = std.unicode.utf8Encode(@intCast(click.rune), &rune_buf) catch return;
+            const msg = std.fmt.bufPrint(
+                &buf,
+                "status {s}\n",
+                .{rune_buf[0..rune_len]},
+            ) catch return;
+
+            Io.File.stdout().writeStreamingAll(
+                state.io,
+                msg,
+            ) catch return;
+            return;
+        }
+    }
+}
+
+pub fn handleStatusScroll(self: *Bar, x: i32, direction: []const u8) void {
+    for (self.status_clicks.items) |click| {
+        if (click.contains(x)) {
+            var buf: [256]u8 = undefined;
+            var rune_buf: [4]u8 = undefined;
+            const rune_len = std.unicode.utf8Encode(@intCast(click.rune), &rune_buf) catch return;
+            const msg = std.fmt.bufPrint(
+                &buf,
+                "scroll {s}:{s}\n",
+                .{ rune_buf[0..rune_len], direction },
+            ) catch return;
+
+            Io.File.stdout().writeStreamingAll(
+                state.io,
+                msg,
+            ) catch return;
+            return;
+        }
+    }
+}
 pub fn create(monitor: *Monitor) !*Bar {
     const bg_color = &state.config.normalBgColor;
     const self = try state.gpa.create(Bar);
     self.monitor = monitor;
     self.configured = false;
+    self.status_clicks = .empty;
 
     const compositor = state.wayland.compositor.?;
     const viewporter = state.wayland.viewporter.?;
@@ -65,6 +120,9 @@ pub fn create(monitor: *Monitor) !*Bar {
     self.title = try Widget.init(self.background.surface);
     self.tags = try Widget.init(self.background.surface);
     self.text = try Widget.init(self.background.surface);
+
+    // Keep the hover overlay above the status text.
+    self.tags.subsurface.placeAbove(self.text.surface);
 
     // calculate right padding for status text
     const font = state.config.font;
@@ -96,11 +154,16 @@ pub fn create(monitor: *Monitor) !*Bar {
 
     self.tags_width = 0;
     self.text_width = 0;
+    self.status_text = null;
 
     return self;
 }
 
 pub fn destroy(self: *Bar) void {
+    if (self.status_text) |text| {
+        state.gpa.free(text);
+    }
+
     self.abbrev_run.destroy();
     self.monitor.bar = null;
 
@@ -113,6 +176,7 @@ pub fn destroy(self: *Bar) void {
     self.title.deinit();
     self.tags.deinit();
     self.text.deinit();
+    self.status_clicks.deinit(state.gpa);
     state.gpa.destroy(self);
 }
 

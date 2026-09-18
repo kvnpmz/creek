@@ -34,6 +34,12 @@ control: ?*zriver.ControlV1 = null,
 river_seat: ?*Seat = null,
 monitors: std.ArrayList(*Monitor),
 inputs: std.ArrayList(*Input),
+outputs: std.ArrayList(OutputInfo),
+
+const OutputInfo = struct {
+    output: *wl.Output,
+    globalName: u32,
+};
 
 pub fn init() !Wayland {
     const display = try wl.Display.connect(null);
@@ -46,6 +52,7 @@ pub fn init() !Wayland {
         .fd = wfd,
         .monitors = std.ArrayList(*Monitor).empty,
         .inputs = std.ArrayList(*Input).empty,
+        .outputs = std.ArrayList(OutputInfo).empty,
     };
 }
 
@@ -53,9 +60,11 @@ pub fn deinit(self: *Wayland) void {
     for (self.monitors.items) |monitor| monitor.destroy();
     for (self.inputs.items) |input| input.destroy();
 
-    if (self.river_seat) |s| s.destroy();
+    for (self.outputs.items) |output| output.output.destroy();
+
     self.monitors.deinit(state.gpa);
     self.inputs.deinit(state.gpa);
+    self.outputs.deinit(state.gpa);
 
     if (self.compositor) |global| global.destroy();
     if (self.subcompositor) |global| global.destroy();
@@ -64,6 +73,7 @@ pub fn deinit(self: *Wayland) void {
     if (self.single_pixel_buffer_manager) |global| global.destroy();
     if (self.layer_shell) |global| global.destroy();
     if (self.status_manager) |global| global.destroy();
+    if (self.river_seat) |s| s.destroy();
     if (self.control) |global| global.destroy();
     // TODO: Do we need to .release() the seat?
     if (self.seat) |global| global.destroy();
@@ -78,6 +88,11 @@ pub fn registerGlobals(self: *Wayland) !void {
     const errno = self.display.roundtrip();
     if (errno != .SUCCESS) {
         return error.RoundtripFailed;
+    }
+
+    for (self.outputs.items) |output| {
+        const monitor = try Monitor.create(output.output, output.globalName);
+        try self.monitors.append(state.gpa, monitor);
     }
 }
 
@@ -122,6 +137,7 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, self: *Way
 }
 
 fn bindGlobal(self: *Wayland, registry: *wl.Registry, name: u32, iface: [*:0]const u8) !void {
+    log.info("global {}: {s}", .{ name, iface });
     if (mem.orderZ(u8, iface, wl.Compositor.interface.name) == .eq) {
         self.compositor = try registry.bind(name, wl.Compositor, 4);
     } else if (mem.orderZ(u8, iface, wl.Subcompositor.interface.name) == .eq) {
@@ -136,12 +152,15 @@ fn bindGlobal(self: *Wayland, registry: *wl.Registry, name: u32, iface: [*:0]con
         self.layer_shell = try registry.bind(name, zwlr.LayerShellV1, 1);
     } else if (mem.orderZ(u8, iface, zriver.StatusManagerV1.interface.name) == .eq) {
         self.status_manager = try registry.bind(name, zriver.StatusManagerV1, 2);
-        self.river_seat = try Seat.create(); // TODO: find a better way to do this
+        self.river_seat = try Seat.create();
     } else if (mem.orderZ(u8, iface, zriver.ControlV1.interface.name) == .eq) {
         self.control = try registry.bind(name, zriver.ControlV1, 1);
     } else if (mem.orderZ(u8, iface, wl.Output.interface.name) == .eq) {
-        const monitor = try Monitor.create(registry, name);
-        try self.monitors.append(state.gpa, monitor);
+        const output = try registry.bind(name, wl.Output, 4);
+        try self.outputs.append(state.gpa, .{
+            .output = output,
+            .globalName = name,
+        });
     } else if (mem.orderZ(u8, iface, wl.Seat.interface.name) == .eq) {
         self.seat = try registry.bind(name, wl.Seat, 5);
         try self.inputs.append(state.gpa, try Input.create(name));

@@ -1,3 +1,4 @@
+const Tags = @import("Tags.zig");
 const std = @import("std");
 const log = std.log;
 const mem = std.mem;
@@ -46,8 +47,9 @@ pub fn run(self: *Loop) !void {
         },
     };
 
-    var readbuffer: [1024]u8 = undefined;
-    var reader = Io.File.stdin().reader(state.io, &readbuffer);
+    var status_input: std.ArrayList(u8) = .empty;
+    defer status_input.deinit(state.gpa);
+
     while (true) {
         while (true) {
             const ret = wayland.display.dispatchPending();
@@ -83,20 +85,53 @@ pub fn run(self: *Loop) !void {
 
         // status input
         if (fds[2].revents & posix.POLL.IN != 0) {
-            if (state.wayland.river_seat) |seat| {
-                if (seat.focusedBar()) |bar| {
-                    try seat.status_text.flush();
-                    _ = try reader.interface.streamDelimiter(&seat.status_text, '\n');
-                    try seat.status_text.flush();
+            var status_buffer: [1024]u8 = undefined;
+            const rc = posix.read(posix.STDIN_FILENO, &status_buffer) catch {
+                continue;
+            };
 
-                    render.renderText(bar, seat.status_text.buffered()) catch |err| {
-                        log.err("renderText failed for monitor {}: {s}", .{ bar.monitor.globalName, @errorName(err) });
-                        continue;
-                    };
+            if (rc == 0) continue;
 
-                    bar.text.surface.commit();
-                    bar.background.surface.commit();
+            try status_input.appendSlice(state.gpa, status_buffer[0..rc]);
+
+            const bar_opt = if (state.wayland.river_seat) |seat|
+                seat.focusedBar() orelse (if (state.wayland.monitors.items.len > 0) state.wayland.monitors.items[0].confBar() else null)
+            else if (state.wayland.monitors.items.len > 0)
+                state.wayland.monitors.items[0].confBar()
+            else
+                null;
+
+            if (bar_opt) |bar| {
+                // Process only complete lines; keep partial input for the next read.
+                while (std.mem.indexOfScalar(u8, status_input.items, '\n')) |newline| {
+                    const line = status_input.items[0..newline];
+                    const remaining = status_input.items[newline + 1 ..];
+
+                    if (line.len > 0) {
+                        if (std.mem.startsWith(u8, line, "text ")) {
+                            const status_str = line["text ".len..];
+                            render.renderText(bar, status_str) catch |err| {
+                                log.err("renderText failed: {s}", .{@errorName(err)});
+                            };
+                            bar.text.surface.commit();
+                        } else if (std.mem.startsWith(u8, line, "tags ")) {
+                            const tag_list_str = line["tags ".len..];
+                            bar.monitor.tags.parse(tag_list_str) catch |err| {
+                                log.err("Tags parsing failed: {s}", .{@errorName(err)});
+                            };
+                            render.renderTags(bar) catch |err| {
+                                log.err("renderTags failed: {s}", .{@errorName(err)});
+                            };
+                            bar.tags.surface.commit();
+                        }
+                    }
+
+                    const remaining_len = remaining.len;
+                    std.mem.copyForwards(u8, status_input.items[0..remaining_len], remaining);
+                    status_input.shrinkRetainingCapacity(remaining_len);
                 }
+
+                bar.background.surface.commit();
             }
         }
     }

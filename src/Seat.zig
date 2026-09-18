@@ -80,8 +80,11 @@ fn updateTitle(self: *Seat, data: [*:0]const u8) void {
     defer self.mtx.unlock(state.io);
 
     if (self.window_title) |t| {
+        if (std.mem.eql(u8, t, title)) return;
         state.gpa.free(t);
+        self.window_title = null;
     }
+
     if (title.len == 0) {
         self.window_title = null;
     } else {
